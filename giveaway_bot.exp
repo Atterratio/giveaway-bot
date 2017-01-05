@@ -1,0 +1,37 @@
+#Copy this file as "giveaway_bot.ini"
+[main]
+#Time in minutes to sleep before new check
+sleepTime: 60
+
+[Steam]
+#Paste cookies with the same name from http://steamcommunity.com/
+sessionid:
+steamLogin:
+#Replace "%7C%7C" to "||" in "steamLogin"
+
+#Additions to Steam wishlist, will be used whenever where use parsed wishlist but not built-in site, o add some aliases.
+#For example: GTA V; Skyrim; Dishonored
+wishlist:
+
+[SteamGifts]
+enable: 1
+
+#Paste cookies with the same name from http://www.steamgifts.com/
+PHPSESSID:
+
+#Inter only in giveaways for game in wishlist(site built-in)
+wishlist: 1
+
+[IndieGala]
+enable: 1
+
+#Paste cookies with the same name from http://www.indiegala.com/
+auth:
+
+#Try inter only in giveaways for game parsed from Steam wishlist(parsed)
+wishlist: 1
+
+#expiry, price, participants
+sort: expiry
+#desc, asc
+direction: desc
