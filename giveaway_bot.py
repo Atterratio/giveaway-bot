@@ -25,6 +25,7 @@ else:
 
 os.chdir(os.path.dirname(__file__))
 
+#TODO: USER_AGENT from config
 USER_AGENT = 'Mozilla/5.0'
 
 
@@ -43,7 +44,7 @@ class GiveawayBot:
         self.log_level = log_level
         self.log = logging.getLogger('Bot')
         if not self.log.hasHandlers():
-            formatter = logging.Formatter('[%(asctime)s][%(name)s][%(processName)s][%(levelname)s]: %(message)s', "%Y-%m-%d %H:%M:%S")
+            formatter = logging.Formatter('[%(asctime)s][%(levelname)s][%(name)s][%(processName)s]: %(message)s', "%Y-%m-%d %H:%M:%S")
             console = logging.StreamHandler()
             console.setFormatter(formatter)
             self.log.addHandler(console)
@@ -84,7 +85,7 @@ class Parser:
     def __init__(self, log_level):
         self.log = logging.getLogger(self.name)
         if not self.log.hasHandlers():
-            formatter = logging.Formatter('[%(asctime)s][%(name)s][%(processName)s][%(levelname)s]: %(message)s', "%Y-%m-%d %H:%M:%S")
+            formatter = logging.Formatter('[%(asctime)s][%(levelname)s][%(name)s][%(processName)s]: %(message)s', "%Y-%m-%d %H:%M:%S")
             console = logging.StreamHandler()
             console.setFormatter(formatter)
             self.log.addHandler(console)
@@ -190,7 +191,7 @@ class Harvester(Parser):
         reap = self._reap()
         self.log.info("Stoping %s reap" % self.verbose_name)
 
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now()
 
         results = {'timestamp': timestamp, 'sow': sow, 'reap': reap}
 
@@ -256,10 +257,10 @@ class SteamGiftsParser(Harvester):
                         btn_text = page.find('div', {'class': 'sidebar__error'}).text.strip()
                         if btn_text == 'Not Enough Points':
                             sowing = False
-                            self.log.warning("%s." % btn_text)
+                            self.log.info("%s." % btn_text)
                             break
                         else:
-                            self.log.debug("Can't inter in giveawat.%s" % btn_text)
+                            self.log.debug("Can't inter in giveaway.%s" % btn_text)
                             continue
                     else:
                         form = page.find('div', {'class': 'sidebar'}).find('form')
@@ -274,14 +275,14 @@ class SteamGiftsParser(Harvester):
                         status = request.urlopen(r).getcode()
                         if status == 200:
                             giveaways_inter.append({'title': item_title, 'href': item_href},)
-                            self.log.info('Take part in %s game giveaway.' % item_title)
+                            self.log.info('Take part in «%s» giveaway.' % item_title)
 
             page = soup.find('div', {'class': 'pagination__navigation'}).find_all('a')[-1]
             if page.span.text == 'Next':
                 params.update({'page': int(page['data-page-number'])})
             else:
                 sowing = False
-                self.log.warning('No more giveaways.')
+                self.log.info('No more giveaways.')
                 break
 
         return giveaways_inter
@@ -326,10 +327,11 @@ def main():
     options, args = opt_parser.parse_args()
 
     log = logging.getLogger('Main')
-    formatter = logging.Formatter('[%(asctime)s][%(name)s][%(processName)s][%(levelname)s]: %(message)s', "%Y-%m-%d %H:%M:%S")
-    console = logging.StreamHandler()
-    console.setFormatter(formatter)
-    log.addHandler(console)
+    if not log.hasHandlers():
+        formatter = logging.Formatter('[%(asctime)s][%(levelname)s][%(name)s][%(processName)s]: %(message)s', "%Y-%m-%d %H:%M:%S")
+        console = logging.StreamHandler()
+        console.setFormatter(formatter)
+        log.addHandler(console)
 
     if options.debug:
         log_level = logging.DEBUG
@@ -361,11 +363,11 @@ def main():
                     while not queue.empty():
                         results = queue.get()
                         if len(results['reap']) > 0:
-                            log.info('At %(timestamp)s Harvester end work takes part in %(num)s giveaways, and you have win something.' %
-                                     {'timestamp': results['timestamp'], 'num': len(results['sow'])})
+                            log.info('[%(timestamp)s] %(key)s Harvester end work takes part in %(num)s giveaways, and you have win something.' %
+                                     {'timestamp': results['timestamp'].strftime("%Y-%m-%d %H:%M:%S"), 'key': key, 'num': len(results['sow'])})
                         else:
-                            log.info("At %(timestamp)s Harvester end work: takes part in %(num)s giveaways, and you don't win anything at for now." %
-                                     {'timestamp': results['timestamp'], 'num': len(results['sow'])})
+                            log.info("[%(timestamp)s] %(key)s Harvester end work: takes part in %(num)s giveaways, and you don't win anything. For now." %
+                                     {'timestamp': results['timestamp'].strftime("%Y-%m-%d %H:%M:%S"), 'key': key, 'num': len(results['sow'])})
 
                 time.sleep(60)
 
