@@ -112,9 +112,6 @@ class Parser:
 
         return results
 
-    def stop(self):
-        sys.exit()
-
     def _main(self):
         pass
 
@@ -175,10 +172,26 @@ class SteamParser(Parser):
 
 
 class Harvester(Parser):
+
+    def start(self):
+        self.log.info("Starting %s harvester" % self.verbose_name)
+        self._login_check()
+        results = self._main()
+        self.log.info("Stoping %s harvester" % self.verbose_name)
+
+        return results
+
     def _main(self):
+        self.log.info("Startind %s sow" % self.verbose_name)
         sow = self._sow()
+        self.log.info("Stoping %s sow" % self.verbose_name)
+
+        self.log.info("Startind %s reap" % self.verbose_name)
         reap = self._reap()
+        self.log.info("Stoping %s reap" % self.verbose_name)
+
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         results = {'timestamp': timestamp, 'sow': sow, 'reap': reap}
 
         return results
@@ -189,9 +202,10 @@ class Harvester(Parser):
         return giveaways_inter
 
     def _reap(self):
-        giveaways_win = False
+        giveaways_win = ({'title': None, 'href': None},)
 
         return giveaways_win
+
 
 class SteamGiftsParser(Harvester):
     name = "SteamGifts"
@@ -272,6 +286,31 @@ class SteamGiftsParser(Harvester):
 
         return giveaways_inter
 
+    def _reap(self):
+        giveaways_win = []
+
+        url = '%sgiveaways/won' % self.site_url
+
+        r = request.Request(url, headers={'user-agent': USER_AGENT, 'cookie': self.cookies})
+        html = str(request.urlopen(r).read())
+        soup = bs4.BeautifulSoup(html, PARSER)
+
+        items = soup.find('div', {'class': 'table__rows'}).find_all('div', {'class': 'table__row-outer-wrap'})
+
+        for item in items:
+            not_received = item.find('div', {'class': 'table__gift-feedback-received is-hidden'})
+            if not_received:
+                item_header = item.find('a', {'class': 'table__column__heading'})
+                item_title = item_header.text.strip()
+                item_href = "%s%s" % (self.site_url, item_header['href'])
+
+                giveaways_win.append({'title': item_title, 'href': item_href},)
+
+            else:
+                continue
+
+        return giveaways_win
+
 
 def spawner(name, queue, log_level):
     if name == "SteamGifts":
@@ -321,7 +360,7 @@ def main():
                     queue = bot.processes_logs[key]
                     while not queue.empty():
                         results = queue.get()
-                        if results['reap']:
+                        if len(results['reap']) > 0:
                             log.info('At %(timestamp)s Harvester end work takes part in %(num)s giveaways, and you have win something.' %
                                      {'timestamp': results['timestamp'], 'num': len(results['sow'])})
                         else:
