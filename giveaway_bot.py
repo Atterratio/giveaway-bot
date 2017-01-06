@@ -6,12 +6,14 @@ import logging
 import configparser
 import time
 import multiprocessing
+import json
+import re
 
 import bs4
 
 from datetime import datetime
 from optparse import OptionParser
-from urllib import request, parse
+from urllib import request, parse, error
 
 from ghost import Ghost
 
@@ -31,6 +33,11 @@ USER_AGENT = 'Mozilla/5.0'
 class Error(Exception):
     def __init__(self, name, message):
         log = logging.getLogger(name)
+        if not log.hasHandlers():
+            formatter = logging.Formatter('[%(asctime)s][%(levelname)s][%(name)s][%(processName)s]: %(message)s', "%Y-%m-%d %H:%M:%S")
+            console = logging.StreamHandler()
+            console.setFormatter(formatter)
+            log.addHandler(console)
         log.error(message)
 
 
@@ -49,6 +56,13 @@ class GiveawayBot:
             self.log.addHandler(console)
         self.log.setLevel(self.log_level)
 
+        self.config = configparser.ConfigParser()
+        try:
+            self.config.read_file(open("giveaway_bot.ini"))
+        except FileNotFoundError:
+            self.log.error("No config file. Please copy «giveaway_bot.exp» as «giveaway_bot.ini» and edit it.")
+            sys.exit()
+
         self.parsers = [{"name": "Steam"}, {"name": "SteamGifts"}, {"name": "IndieGala"}]
 
         self.wishlist = None
@@ -60,10 +74,14 @@ class GiveawayBot:
                 prs = SteamParser(self.log_level)
                 self.wishlist = prs.start()
             else:
-                queue = multiprocessing.Queue()
-                self.processes_logs.update({parser['name']: queue})
-                process = multiprocessing.Process(target=spawner, args=(parser['name'], queue, self.log_level), name=parser['name'])
-                process.start()
+                enable = int(self.config[parser['name']]['enable'])
+                if enable:
+                    queue = multiprocessing.Queue()
+                    self.processes_logs.update({parser['name']: queue})
+                    process = multiprocessing.Process(target=spawner, args=(parser['name'], queue, self.wishlist, self.log_level), name=parser['name'])
+                    process.start()
+                else:
+                    continue
 
     def stop(self):
         for child in multiprocessing.active_children():
@@ -91,11 +109,7 @@ class Parser:
         self.log.setLevel(log_level)
 
         config = configparser.ConfigParser()
-        try:
-            config.read_file(open("giveaway_bot.ini"))
-        except FileNotFoundError:
-            self.log.error("No config file. Please copy «giveaway_bot.exp» as «giveaway_bot.ini» and edit it.")
-            sys.exit()
+        config.read_file(open("giveaway_bot.ini"))
         self.config = config[self.name]
 
         cookies_str = ''
@@ -117,7 +131,7 @@ class Parser:
 
     def _login_check(self):
         r = request.Request(self.site_url, headers={'user-agent': USER_AGENT, 'cookie': self.cookies})
-        html = str(request.urlopen(r).read())
+        html = request.urlopen(r).read().decode('utf-8')
         soup = bs4.BeautifulSoup(html, PARSER)
         login = soup.find(self.check_tag, {self.check_type, self.check_text})
         if login:
@@ -140,7 +154,7 @@ class SteamParser(Parser):
 
         url = "http://steamcommunity.com/profiles/%s/wishlist/" % self.config["steamLogin"][:17]
         r = request.Request(url, headers={'user-agent': USER_AGENT, 'cookie': self.cookies})
-        html = str(request.urlopen(r).read())
+        html = request.urlopen(r).read().decode('utf-8')
         soup = bs4.BeautifulSoup(html, PARSER)
         items = soup.find_all('div', {"class", 'wishlistRow'})
         i = 0
@@ -157,7 +171,7 @@ class SteamParser(Parser):
                     price = ''
                     price_old = ''
 
-            data = {'num': i, 'id': str.strip(item['id'], 'game_'), 'name': item.find('h4', {'class': 'ellipsis'}).text,
+            data = {'num': i, 'id': str.strip(item['id'], 'game_'), 'title': item.find('h4', {'class': 'ellipsis'}).text,
                     'logo': item.a.img['src'], 'page': item.find('div', {'class': 'storepage_btn_ctn'}).a['href'],
                     'price': price, 'price_old': price_old}
 
@@ -166,12 +180,17 @@ class SteamParser(Parser):
         self.log.info('In Steam Wishlist %s games' % len(list))
 
         for game in self.config['wishlist'].split('; '):
-            list.append({'name': game})
+            list.append({'title': game})
 
         return list
 
 
 class Harvester(Parser):
+
+    def __init__(self, wishlist, log_level):
+        super(Harvester, self).__init__(log_level)
+
+        self.wishlist = wishlist
 
     def start(self):
         self.log.info("Starting %s harvester" % self.verbose_name)
@@ -211,8 +230,13 @@ class Harvester(Parser):
 
         return giveaways_win
 
+    def _giveaway_entry(self):
+        result = None
 
-class SteamGiftsParser(Harvester):
+        return result
+
+
+class SteamGiftsHarvester(Harvester):
     name = "SteamGifts"
     verbose_name = "«Steam Gifts»"
     site_url = "https://www.steamgifts.com/"
@@ -238,7 +262,7 @@ class SteamGiftsParser(Harvester):
                 r_url = '%s%s=%s&' % (r_url, key, params[key])
 
             r = request.Request(r_url, headers={'user-agent': USER_AGENT, 'cookie': self.cookies})
-            html = str(request.urlopen(r).read())
+            html = request.urlopen(r).read().decode('utf-8')
             soup = bs4.BeautifulSoup(html, PARSER)
 
             items = soup.find('div', {'class': 'page__heading'}).next_sibling.next_sibling.find_all('div', {'class': 'giveaway__row-outer-wrap'})
@@ -250,10 +274,8 @@ class SteamGiftsParser(Harvester):
                     item_title = item_header.text.strip()
                     item_href = "%s%s" % (self.site_url, item_header['href'])
 
-                    ajax_url = "%sajax.php" % self.site_url
-
                     r = request.Request(item_href, headers={'user-agent': USER_AGENT, 'cookie': self.cookies})
-                    html = str(request.urlopen(r).read())
+                    html = request.urlopen(r).read().decode('utf-8')
                     page = bs4.BeautifulSoup(html, PARSER)
                     try:
                         btn_text = page.find('div', {'class': 'sidebar__entry-insert'}).text
@@ -267,16 +289,7 @@ class SteamGiftsParser(Harvester):
                             self.log.debug("Can't inter in giveaway.%s" % btn_text)
                             continue
                     else:
-                        form = page.find('div', {'class': 'sidebar'}).find('form')
-                        xsrf_token = form.find('input', {'name': 'xsrf_token'})['value']
-                        do = 'entry_insert'
-                        code = form.find('input', {'name': 'code'})['value']
-
-                        data = parse.urlencode({'xsrf_token': xsrf_token, 'do': do, 'code': code})
-                        data = data.encode('ascii')
-
-                        r = request.Request(ajax_url, data=data, headers={'user-agent': USER_AGENT, 'cookie': self.cookies}, method='POST')
-                        status = request.urlopen(r).getcode()
+                        status = self._giveaway_entry(page)
                         if status == 200:
                             giveaways_inter.append({'title': item_title, 'href': item_href},)
                             self.log.info('Take part in «%s» giveaway.' % item_title)
@@ -297,7 +310,7 @@ class SteamGiftsParser(Harvester):
         url = '%sgiveaways/won' % self.site_url
 
         r = request.Request(url, headers={'user-agent': USER_AGENT, 'cookie': self.cookies})
-        html = str(request.urlopen(r).read())
+        html = request.urlopen(r).read().decode('utf-8')
         soup = bs4.BeautifulSoup(html, PARSER)
 
         items = soup.find('div', {'class': 'table__rows'}).find_all('div', {'class': 'table__row-outer-wrap'})
@@ -316,13 +329,169 @@ class SteamGiftsParser(Harvester):
 
         return giveaways_win
 
+    def _giveaway_entry(self, page):
+        url = "%sajax.php" % self.site_url
 
-def spawner(name, queue, log_level):
-    if name == "SteamGifts":
-        harvester = SteamGiftsParser(log_level)
-        results = harvester.start()
+        form = page.find('div', {'class': 'sidebar'}).find('form')
+        xsrf_token = form.find('input', {'name': 'xsrf_token'})['value']
+        do = 'entry_insert'
+        code = form.find('input', {'name': 'code'})['value']
 
-        queue.put(results)
+        data = parse.urlencode({'xsrf_token': xsrf_token, 'do': do, 'code': code})
+        data = data.encode('ascii')
+
+        r = request.Request(url, data=data, headers={'user-agent': USER_AGENT, 'cookie': self.cookies}, method='POST')
+        status = request.urlopen(r).getcode()
+
+        return status
+
+
+class IndieGalaHarvester(Harvester):
+    name = "IndieGala"
+    verbose_name = "«Indie Gala»"
+    site_url = "https://www.indiegala.com/"
+    check_tag = "span"
+    check_type = "class"
+    check_text = "account-email"
+    cookies = {'auth': None, 'incap_ses_586_255598': None}
+
+    def get_level(self):
+        url = "%sgiveaways/get_user_level_and_coins" % self.site_url
+        r = request.Request(url, headers={'user-agent': USER_AGENT, 'cookie': self.cookies})
+        data = json.loads(request.urlopen(r).read().decode('utf-8'))
+
+        try:
+            if data['status'] == 'ok':
+                return data['current_level']
+            else:
+                raise ParserError(self.name, "Can't get %s level" % self.verbose_name)
+        except KeyError:
+            raise ParserError(self.name, "Can't get %s level" % self.verbose_name)
+
+    def get_coins(self):
+        url = "%sgiveaways" % self.site_url
+        r = request.Request(url, headers={'user-agent': USER_AGENT, 'cookie': self.cookies})
+        html = request.urlopen(r).read().decode('utf-8')
+        soup = bs4.BeautifulSoup(html, PARSER)
+
+        coins = int(soup.find('span', {'id': 'silver-coins-menu'}).text)
+
+        return coins
+
+    def _sow(self):
+        level = self.get_level()
+        coins = self.get_coins()
+        giveaways_inter = []
+        sowing = True
+
+        url = '%sgiveaways' % self.site_url
+        if self.config['sort'] and self.config['direction']:
+            params = '%s/%s' % (self.config['sort'], self.config['direction'])
+        elif self.config['sort']:
+            params = '%s/asc' % self.config['sort']
+        elif self.config['direction']:
+            params = 'expiry/%s' % self.config['direction']
+        else:
+            params = 'expiry/asc'
+
+        i = 1
+        while sowing:
+            r_url = "%s/%s/%s" % (url, i, params)
+            r = request.Request(r_url, headers={'user-agent': USER_AGENT, 'cookie': self.cookies})
+            html = request.urlopen(r).read().decode('utf-8')
+            soup = bs4.BeautifulSoup(html, PARSER)
+
+            items = soup.find('div', {'class': 'tickets-row'}).find_all('div', {'class': 'tickets-col'})
+            for item in items:
+                item_level = int(re.findall(r'\d', item.find('div', {'class': 'type-level-cont'}).find('div', {'class': 'spacer-v-5'}).next.strip())[0])
+                coupon = item.find('aside', {'class': 'giv-coupon'})
+                item_header = item.find('div', {'class': 'box_pad_5'}).h2.a
+                item_title = item_header['title']
+                item_href = "%s%s" % (self.site_url, item_header['href'])
+
+                giv_id = item.find('div', {'class': 'ticket-right'}).div['rel']
+                ticket_price = int(item.find('div', {'class': 'ticket-price'}).strong.text.strip())
+
+                if level < item_level or not coupon:
+                    continue
+
+                elif coins < ticket_price:
+                    sowing = False
+                    self.log.info("Not Enough Coins.")
+                    break
+
+                elif not int(self.config['wishlist']):
+                    resp = self._giveaway_entry(giv_id, ticket_price)
+                    status = resp['status']
+                    coins = resp['new_amount']
+                    if status == 'ok':
+                        giveaways_inter.append({'title': item_title, 'href': item_href},)
+                        self.log.info('Take part in «%s» giveaway.' % item_title)
+
+                else:
+                    for wish in self.wishlist:
+                        if re.escape(str.lower(item_title)) == re.escape(str.lower(wish["title"])):
+                            resp = self._giveaway_entry(giv_id, ticket_price)
+                            status = resp['status']
+                            coins = resp['new_amount']
+                            if status == 'ok':
+                                giveaways_inter.append({'title': item_title, 'href': item_href},)
+                                self.log.info('Take part in «%s» giveaway.' % item_title)
+
+            page = soup.find('div', {'class': 'page-nav'}).find_all('div', {'class': 'page-link-cont'})[-2]
+            if page.a:
+                i += 1
+            else:
+                sowing = False
+                self.log.info('No more giveaways.')
+                break
+
+        return giveaways_inter
+
+
+    def _giveaway_entry(self, giv_id, ticket_price):
+        url = '%sgiveaways/new_entry' % self.site_url
+
+        data = json.dumps({'giv_id': giv_id, 'ticket_price': ticket_price}).encode('utf-8')
+
+        r = request.Request(url, data=data, headers={'user-agent': USER_AGENT, 'cookie': self.cookies}, method='POST')
+        resp = request.urlopen(r).read().decode('utf-8')
+        resp = json.loads(resp)
+
+        return resp
+
+
+def spawner(name, queue, wishlist, log_level):
+    log = logging.getLogger(name)
+
+    if not log.hasHandlers():
+        formatter = logging.Formatter('[%(asctime)s][%(levelname)s][%(name)s][%(processName)s]: %(message)s',
+                                      "%Y-%m-%d %H:%M:%S")
+        console = logging.StreamHandler()
+        console.setFormatter(formatter)
+        log.addHandler(console)
+
+    log.setLevel(log_level)
+
+    try:
+        if name == "SteamGifts":
+            harvester = SteamGiftsHarvester(wishlist, log_level)
+            results = harvester.start()
+
+            queue.put(results)
+
+        elif name == "IndieGala":
+            harvester = IndieGalaHarvester(wishlist, log_level)
+            results = harvester.start()
+
+            queue.put(results)
+
+    except FileNotFoundError:
+        log.error("No config file. Please copy «giveaway_bot.exp» as «giveaway_bot.ini» and edit it.")
+    except ParserError:
+        pass
+    except error.HTTPError as e:
+        log.error('HTTP error code %s: %s' % (e.code, e.msg))
 
 
 def main():
