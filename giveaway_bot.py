@@ -10,12 +10,11 @@ import json
 import re
 
 import bs4
+import browser_cookie3
 
 from datetime import datetime
 from optparse import OptionParser
 from urllib import request, parse, error
-
-from ghost import Ghost
 
 try:
     import lxml
@@ -122,7 +121,7 @@ class Parser:
         self.log.info("Starting %s parser" % self.verbose_name)
         self._login_check()
         results = self._main()
-        self.log.info("Stoping %s parser" % self.verbose_name)
+        self.log.info("End of work %s parser" % self.verbose_name)
 
         return results
 
@@ -196,23 +195,31 @@ class Harvester(Parser):
         self.log.info("Starting %s harvester" % self.verbose_name)
         self._login_check()
         results = self._main()
-        self.log.info("Stoping %s harvester" % self.verbose_name)
+        self.log.info("End of work  %s harvester" % self.verbose_name)
 
         return results
 
-    def _main(self):
-        self.log.info("Startind %s sow" % self.verbose_name)
-        sow = self._sow()
-        self.log.info("Stoping %s sow" % self.verbose_name)
+    def _stop(self):
+        self.log.warning("Interrupt of work  %s harvester" % self.verbose_name)
+        for child in multiprocessing.active_children():
+            child.terminate()
 
-        self.log.info("Startind %s reap" % self.verbose_name)
+        sys.exit()
+
+
+    def _main(self):
+        self.log.debug("Startind %s sow" % self.verbose_name)
+        sow = self._sow()
+        self.log.debug("Stoping %s sow" % self.verbose_name)
+
+        self.log.debug("Startind %s reap" % self.verbose_name)
         reap = self._reap()
         if reap:
             self.log.info('You win something, check it at %s !' % self.site_url)
         else:
             self.log.info("You don't win anything. For now...")
 
-        self.log.info("Stoping %s reap" % self.verbose_name)
+        self.log.debug("Stoping %s reap" % self.verbose_name)
 
         timestamp = datetime.now()
 
@@ -222,11 +229,13 @@ class Harvester(Parser):
 
     def _sow(self):
         giveaways_inter = ({'title': None, 'href': None},)
+        giveaways_inter = ()
 
         return giveaways_inter
 
     def _reap(self):
         giveaways_win = ({'title': None, 'href': None},)
+        giveaways_win = ()
 
         return giveaways_win
 
@@ -239,7 +248,7 @@ class Harvester(Parser):
 class SteamGiftsHarvester(Harvester):
     name = "SteamGifts"
     verbose_name = "«Steam Gifts»"
-    site_url = "https://www.steamgifts.com/"
+    site_url = "https://www.steamgifts.com"
     check_tag = "div"
     check_type = "class"
     check_text = "nav__avatar-inner-wrap"
@@ -248,15 +257,17 @@ class SteamGiftsHarvester(Harvester):
     def _sow(self):
         giveaways_inter = []
         params = {}
-        sowing = True
+        sow = True
 
         if int(self.config['wishlist']):
-            url = '%sgiveaways/search' % self.site_url
+            url = '%s/giveaways/search' % self.site_url
             params.update({'type': 'wishlist'})
         else:
             url = self.site_url
 
-        while sowing:
+        i = 1
+        while sow:
+            self.log.debug('Starting parse page %s' % i)
             r_url = "%s?" % url
             for key in params:
                 r_url = '%s%s=%s&' % (r_url, key, params[key])
@@ -282,9 +293,7 @@ class SteamGiftsHarvester(Harvester):
                     except:
                         btn_text = page.find('div', {'class': 'sidebar__error'}).text.strip()
                         if btn_text == 'Not Enough Points':
-                            sowing = False
-                            self.log.info("%s." % btn_text)
-                            break
+                            raise ParserError(self.name, "%s." % btn_text)
                         else:
                             self.log.debug("Can't inter in giveaway.%s" % btn_text)
                             continue
@@ -296,9 +305,10 @@ class SteamGiftsHarvester(Harvester):
 
             page = soup.find('div', {'class': 'pagination__navigation'}).find_all('a')[-1]
             if page.span.text == 'Next':
-                params.update({'page': int(page['data-page-number'])})
+                i += 1
+                params.update({'page': i})
             else:
-                sowing = False
+                sow = False
                 self.log.info('No more giveaways.')
                 break
 
@@ -307,7 +317,7 @@ class SteamGiftsHarvester(Harvester):
     def _reap(self):
         giveaways_win = []
 
-        url = '%sgiveaways/won' % self.site_url
+        url = '%s/giveaways/won' % self.site_url
 
         r = request.Request(url, headers={'user-agent': USER_AGENT, 'cookie': self.cookies})
         html = request.urlopen(r).read().decode('utf-8')
@@ -330,7 +340,7 @@ class SteamGiftsHarvester(Harvester):
         return giveaways_win
 
     def _giveaway_entry(self, page):
-        url = "%sajax.php" % self.site_url
+        url = "%s/ajax.php" % self.site_url
 
         form = page.find('div', {'class': 'sidebar'}).find('form')
         xsrf_token = form.find('input', {'name': 'xsrf_token'})['value']
@@ -349,14 +359,14 @@ class SteamGiftsHarvester(Harvester):
 class IndieGalaHarvester(Harvester):
     name = "IndieGala"
     verbose_name = "«Indie Gala»"
-    site_url = "https://www.indiegala.com/"
+    site_url = "https://www.indiegala.com"
     check_tag = "span"
     check_type = "class"
     check_text = "account-email"
     cookies = {'auth': None, 'incap_ses_586_255598': None}
 
     def get_level(self):
-        url = "%sgiveaways/get_user_level_and_coins" % self.site_url
+        url = "%s/giveaways/get_user_level_and_coins" % self.site_url
         r = request.Request(url, headers={'user-agent': USER_AGENT, 'cookie': self.cookies})
         data = json.loads(request.urlopen(r).read().decode('utf-8'))
 
@@ -369,7 +379,7 @@ class IndieGalaHarvester(Harvester):
             raise ParserError(self.name, "Can't get %s level" % self.verbose_name)
 
     def get_coins(self):
-        url = "%sgiveaways" % self.site_url
+        url = "%s/giveaways" % self.site_url
         r = request.Request(url, headers={'user-agent': USER_AGENT, 'cookie': self.cookies})
         html = request.urlopen(r).read().decode('utf-8')
         soup = bs4.BeautifulSoup(html, PARSER)
@@ -382,9 +392,9 @@ class IndieGalaHarvester(Harvester):
         level = self.get_level()
         coins = self.get_coins()
         giveaways_inter = []
-        sowing = True
+        sow = True
 
-        url = '%sgiveaways' % self.site_url
+        url = '%s/giveaways' % self.site_url
         if self.config['sort'] and self.config['direction']:
             params = '%s/%s' % (self.config['sort'], self.config['direction'])
         elif self.config['sort']:
@@ -395,7 +405,8 @@ class IndieGalaHarvester(Harvester):
             params = 'expiry/asc'
 
         i = 1
-        while sowing:
+        while sow:
+            self.log.debug('Starting parse page %s' % i)
             r_url = "%s/%s/%s" % (url, i, params)
             r = request.Request(r_url, headers={'user-agent': USER_AGENT, 'cookie': self.cookies})
             html = request.urlopen(r).read().decode('utf-8')
@@ -415,42 +426,91 @@ class IndieGalaHarvester(Harvester):
                 if level < item_level or not coupon:
                     continue
 
-                elif coins < ticket_price:
-                    sowing = False
-                    self.log.info("Not Enough Coins.")
-                    break
-
                 elif not int(self.config['wishlist']):
-                    resp = self._giveaway_entry(giv_id, ticket_price)
-                    status = resp['status']
-                    coins = resp['new_amount']
-                    if status == 'ok':
-                        giveaways_inter.append({'title': item_title, 'href': item_href},)
-                        self.log.info('Take part in «%s» giveaway.' % item_title)
+                    if coins < ticket_price:
+                        sow = False
+                        raise ParserError(self.name, "Not Enough Coins.")
+                    else:
+                        resp = self._giveaway_entry(giv_id, ticket_price)
+                        status = resp['status']
+                        coins = resp['new_amount']
+                        if status == 'ok':
+                            giveaways_inter.append({'title': item_title, 'href': item_href},)
+                            self.log.info('Take part in «%s» giveaway.' % item_title)
 
                 else:
                     for wish in self.wishlist:
                         if re.escape(str.lower(item_title)) == re.escape(str.lower(wish["title"])):
-                            resp = self._giveaway_entry(giv_id, ticket_price)
-                            status = resp['status']
-                            coins = resp['new_amount']
-                            if status == 'ok':
-                                giveaways_inter.append({'title': item_title, 'href': item_href},)
-                                self.log.info('Take part in «%s» giveaway.' % item_title)
+                            if coins < ticket_price:
+                                sow = False
+                                raise ParserError(self.name, "Not Enough Coins.")
+                            else:
+                                resp = self._giveaway_entry(giv_id, ticket_price)
+                                status = resp['status']
+                                coins = resp['new_amount']
+                                if status == 'ok':
+                                    giveaways_inter.append({'title': item_title, 'href': item_href},)
+                                    self.log.info('Take part in «%s» giveaway at %s page.' % (item_title, i))
+                        else:
+                            continue
 
-            page = soup.find('div', {'class': 'page-nav'}).find_all('div', {'class': 'page-link-cont'})[-2]
-            if page.a:
+            try:
+                page = soup.find('div', {'class': 'page-nav'}).find_all('div', {'class': 'page-link-cont'})[-2].a
                 i += 1
-            else:
-                sowing = False
+            except AttributeError:
+                sow = False
                 self.log.info('No more giveaways.')
                 break
 
         return giveaways_inter
 
+    def _reap(self):
+        giveaways_win = []
+
+        url = '%s/giveaways/library_completed' % self.site_url
+
+        r = request.Request(url, headers={'user-agent': USER_AGENT, 'cookie': self.cookies})
+        data = request.urlopen(r).read().decode('utf-8')
+        data = json.loads(data)
+        soup = bs4.BeautifulSoup(data['html'], PARSER)
+        items = soup.find_all('ul', {'class': 'giveaways-completed-list'})[0].find_all('li')
+        try:
+            for item in items:
+                r_url = '%s/giveaways/check_if_won' % self.site_url
+
+                entry_id = item.find('input', {'name': 'entry_id'})['value']
+
+                data = json.dumps({'entry_id': entry_id}).encode('utf-8')
+
+                r = request.Request(r_url, data=data, headers={'user-agent': USER_AGENT, 'cookie': self.cookies}, method='POST')
+                resp = request.urlopen(r).read().decode('utf-8')
+        except TypeError:
+            pass
+
+        r = request.Request(url, headers={'user-agent': USER_AGENT, 'cookie': self.cookies})
+        data = request.urlopen(r).read().decode('utf-8')
+        data = json.loads(data)
+        soup = bs4.BeautifulSoup(data['html'], PARSER)
+        items = soup.find_all('ul', {'class': 'giveaways-completed-list'})[1].find_all('li')
+        try:
+            for item in items:
+                if item.find('button', {'class': 'btn-open-leave-feedback-form'}):
+                    item_header = item.find('a', {'title': 'View giveaway details'})
+                    item_title = item_header.text.strip()
+                    item_href = "%s%s" % (self.site_url, item_header['href'])
+
+                    giveaways_win.append({'title': item_title, 'href': item_href},)
+
+                else:
+                    continue
+
+        except TypeError:
+            pass
+
+        return giveaways_win
 
     def _giveaway_entry(self, giv_id, ticket_price):
-        url = '%sgiveaways/new_entry' % self.site_url
+        url = '%s/giveaways/new_entry' % self.site_url
 
         data = json.dumps({'giv_id': giv_id, 'ticket_price': ticket_price}).encode('utf-8')
 
@@ -488,11 +548,12 @@ def spawner(name, queue, wishlist, log_level):
 
     except FileNotFoundError:
         log.error("No config file. Please copy «giveaway_bot.exp» as «giveaway_bot.ini» and edit it.")
+        harvester._stop()
     except ParserError:
-        pass
+        harvester._stop()
     except error.HTTPError as e:
         log.error('HTTP error code %s: %s' % (e.code, e.msg))
-
+        harvester._stop()
 
 def main():
     opt_parser = OptionParser()

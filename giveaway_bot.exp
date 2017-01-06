@@ -38,5 +38,5 @@ wishlist: 1
 
 #expiry, price, participants
 sort: expiry
-#desc, asc
-direction: desc
+#asc, desc
+direction: asc
