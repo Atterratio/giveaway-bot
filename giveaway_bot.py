@@ -4,7 +4,6 @@ import os
 import sys
 import logging
 import configparser
-import requests
 import time
 import multiprocessing
 
@@ -189,6 +188,11 @@ class Harvester(Parser):
 
         self.log.info("Startind %s reap" % self.verbose_name)
         reap = self._reap()
+        if reap:
+            self.log.info('You win something, check it at %s !' % self.site_url)
+        else:
+            self.log.info("You don't win anything. For now...")
+
         self.log.info("Stoping %s reap" % self.verbose_name)
 
         timestamp = datetime.now()
@@ -370,7 +374,7 @@ def main():
                             log.info('[%(timestamp)s] %(key)s Harvester end work takes part in %(num)s giveaways, and you have win something.' %
                                      {'timestamp': results['timestamp'].strftime("%Y-%m-%d %H:%M:%S"), 'key': key, 'num': len(results['sow'])})
                         else:
-                            log.info("[%(timestamp)s] %(key)s Harvester end work: takes part in %(num)s giveaways, and you don't win anything. For now." %
+                            log.info("[%(timestamp)s] %(key)s Harvester end work: takes part in %(num)s giveaways, and you don't win anything. For now..." %
                                      {'timestamp': results['timestamp'].strftime("%Y-%m-%d %H:%M:%S"), 'key': key, 'num': len(results['sow'])})
 
                 time.sleep(60)
