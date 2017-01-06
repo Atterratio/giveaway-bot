@@ -351,6 +351,10 @@ def main():
 
     config = config['main']
 
+    if config['USER_AGENT']:
+        global USER_AGENT
+        USER_AGENT = config['USER_AGENT']
+
     while True:
         bot = GiveawayBot(log_level)
         try:

@@ -2,6 +2,8 @@
 [main]
 #Time in minutes to sleep before new check
 sleepTime: 60
+#Set parser user agent. Can be useful, but not nessesary if all work
+USER_AGENT:
 
 [Steam]
 #Paste cookies with the same name from http://steamcommunity.com/
