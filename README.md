@@ -1,7 +1,7 @@
 Giveaway Bot Reborn
 ===========
 
-v0.0.1
+v0.1.0
 -------
 
 Bot for inter in some Steam Giveaways
