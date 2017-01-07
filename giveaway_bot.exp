@@ -2,6 +2,8 @@
 [main]
 #Time in minutes to sleep before new check
 sleepTime: 60
+#Set parser user agent. Can be useful, but not nessesary if all work
+USER_AGENT:
 
 [Steam]
 #Paste cookies with the same name from http://steamcommunity.com/
@@ -25,13 +27,16 @@ wishlist: 1
 [IndieGala]
 enable: 1
 
-#Paste cookies with the same name from http://www.indiegala.com/
+#Paste cookies with the same name from https://www.indiegala.com/
+#"" need to
 auth:
+#I think numbers in cookie name may changing
+incap_ses_586_255598:
 
 #Try inter only in giveaways for game parsed from Steam wishlist(parsed)
 wishlist: 1
 
 #expiry, price, participants
 sort: expiry
-#desc, asc
-direction: desc
+#asc, desc
+direction: asc
