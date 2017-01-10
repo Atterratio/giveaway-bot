@@ -1,13 +1,11 @@
 #Copy this file as "giveaway_bot.ini"
 [main]
 #Time in minutes to sleep before new check
-sleepTime: 60
-#Set parser user agent. Can be useful, but not nessesary if all work
-USER_AGENT:
+sleepTime: 10
+User_Agent:
 
 [Steam]
 #Paste cookies with the same name from http://steamcommunity.com/
-sessionid:
 steamLogin:
 #Replace "%7C%7C" to "||" in "steamLogin"
 
@@ -25,16 +23,25 @@ PHPSESSID:
 wishlist: 1
 
 [IndieGala]
-enable: 1
+#Work instable(but work) need incapsula bypass
+enable: 0
 
 #Paste cookies with the same name from https://www.indiegala.com/
 #"" need to
 auth:
-#I think numbers in cookie name may changing
+#Help bypass incapsula some time, but finale need update
 incap_ses_586_255598:
 
 #Try inter only in giveaways for game parsed from Steam wishlist(parsed)
 wishlist: 1
+
+#Enter in giveaways game's what already own(work only if wishlist: 0)
+in_steam: 0
+
+#Enter giveaways only if Trust points>=num
+#Trust points = |(Positive feedbacks)|-|(Negative feedbacks)|
+#Frome some profiles can't get info, when Trust points = -1
+trust_points: 0
 
 #expiry, price, participants
 sort: expiry
