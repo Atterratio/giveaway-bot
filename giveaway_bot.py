@@ -9,15 +9,14 @@ import os
 import re
 import sys
 import time
-import requests
-import random
-from datetime import datetime, timedelta
-from optparse import OptionParser
-from http import cookiejar
-from urllib.error import HTTPError
 import urllib.parse
+from datetime import datetime, timedelta
+from http import cookiejar
+from optparse import OptionParser
+from urllib.error import HTTPError
 
 import bs4
+import requests
 
 try:
     import lxml
@@ -29,6 +28,7 @@ else:
 os.chdir(os.path.dirname(__file__))
 
 User_Agent = 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:50) Gecko/20100101 Firefox/50.0'
+
 
 class Error(Exception):
     def __init__(self, name, message):
@@ -93,8 +93,9 @@ class Parser(metaclass=abc.ABCMeta):
     check_type = None
     check_text = None
     cookies = {}
+    cookies_file = None
 
-    def __init__(self, log_level):
+    def __init__(self, queue, log_level):
         self.login = False
         self.log_level = log_level
         self.log = logging.getLogger(self.name)
@@ -110,12 +111,15 @@ class Parser(metaclass=abc.ABCMeta):
         self.config.read_file(open("giveaway_bot.ini"))
         self.config = self.config[self.name]
 
+        self.queue = queue
+
         try:
             self.user_agent = User_Agent
         except AttributeError:
             pass
 
-        self.cookies_file = '%s.cookies' % self.name
+        self.cookies_file = '%s.cook' % self.name
+
         self.cj = cookiejar.LWPCookieJar(self.cookies_file)
         try:
             self.cj.load()
@@ -123,18 +127,14 @@ class Parser(metaclass=abc.ABCMeta):
             for key in self.cookies:
                 self.cookies[key] = self.config[key]
 
-            netloc = urllib.parse.urlparse(self.site_url).netloc
             expires = datetime.now() + timedelta(days=365)
             expires = expires.timestamp()
 
-            requests.utils.cookiejar_from_dict(self.cookies, cookiejar=self.cj, domain=netloc, expires=expires, discard=False, rest={})
+            requests.utils.cookiejar_from_dict(self.cookies, cookiejar=self.cj, expires=expires,
+                                               discard=False, rest={})
 
         self.session = requests.Session()
         self.session.cookies = self.cj
-        try:
-            self.login = self._login_check()
-        except ParserError:
-            self._crash()
 
     def __del__(self):
         if self.login:
@@ -146,26 +146,38 @@ class Parser(metaclass=abc.ABCMeta):
                 pass
 
     def _crash(self):
+        timestamp = datetime.now()
+        results = {'timestamp': timestamp, 'status': 'error'}
+        self.queue.put(results)
+
         self.log.error('Parsing %s interrupted.' % self.verbose_name)
         sys.exit()
 
-    def _login_check(self):
-        try:
-            html = self.session.get(self.site_url, headers={'User-Agent': self.user_agent}).content
-        except HTTPError as e:
-            self.login_error = True
-            raise ParserError(self.name, "Can't login to %s, HTTPError: %s. Check cookie, or wait some time." %
-                              (self.verbose_name, e.code))
-
+    def _login_check(self, html):
         soup = bs4.BeautifulSoup(html, PARSER)
         login = soup.find(self.check_tag, {self.check_type, self.check_text})
         if login:
-            self.log.info("%s login successful" % self.verbose_name)
-            return True
+            if not self.login:
+                self.log.info("%s login successful" % self.verbose_name)
+                self.login = True
         else:
-            self.login_error = True
-            raise ParserError(self.name, "Can't login to %s. Check cookie." % self.verbose_name)
+            if self.login:
+                self.login = False
 
+            try:
+                raise ParserError(self.name, "Can't login to %s. Check cookie." % self.verbose_name)
+            except:
+                self._crash()
+
+def singleton(class_):
+  instances = {}
+  def getinstance(*args, **kwargs):
+    if class_ not in instances:
+        instances[class_] = class_(*args, **kwargs)
+    return instances[class_]
+  return getinstance
+
+@singleton
 class SteamParser(Parser):
     name = "Steam"
     verbose_name = "«Steam Community»"
@@ -174,49 +186,101 @@ class SteamParser(Parser):
     check_type = "class"
     check_text = "user_avatar"
     cookies = {'steamLogin': None}
+    cookies_file = 'Steam.cook'
 
     @property
     def wishlist(self):
-        self.log.info('Fetching Steam Wishlist.')
-        wishlist = []
+        try:
+            return self.preload_wishlist
+        except AttributeError:
+            self.log.info('Fetching Steam Wishlist.')
+            self.preload_wishlist = []
 
-        url = "http://steamcommunity.com/profiles/%s/wishlist/" % self.config["steamLogin"][:17]
-        html = self.session.get(url, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
-        soup = bs4.BeautifulSoup(html, PARSER)
-        items = soup.find_all('div', {"class", 'wishlistRow'})
-        i = 0
-        for item in items:
-            i += 1
-            try:
-                price = item.find('div', {'class': 'price'}).text.strip()
-                price_old = ''
-            except AttributeError:
+            url = "http://steamcommunity.com/profiles/%s/wishlist/" % self.config["steamLogin"][:17]
+            html = self.session.get(url, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
+            self._login_check(html)
+            soup = bs4.BeautifulSoup(html, PARSER)
+            items = soup.find_all('div', {"class", 'wishlistRow'})
+            i = 0
+            for item in items:
+                i += 1
                 try:
-                    price = item.find('div', {'class': 'discount_final_price'}).text.strip()
-                    price_old = item.find('div', {'class': 'discount_original_price'}).text.strip()
-                except:
-                    price = ''
+                    price = item.find('div', {'class': 'price'}).text.strip()
                     price_old = ''
+                except AttributeError:
+                    try:
+                        price = item.find('div', {'class': 'discount_final_price'}).text.strip()
+                        price_old = item.find('div', {'class': 'discount_original_price'}).text.strip()
+                    except:
+                        price = ''
+                        price_old = ''
 
-            data = {'num': i, 'id': str.strip(item['id'], 'game_'),
-                    'title': item.find('h4', {'class': 'ellipsis'}).text,
-                    'logo': item.a.img['src'], 'page': item.find('div', {'class': 'storepage_btn_ctn'}).a['href'],
-                    'price': price, 'price_old': price_old}
+                data = {'num': i, 'id': str.strip(item['id'], 'game_'),
+                        'title': item.find('h4', {'class': 'ellipsis'}).text,
+                        'logo': item.a.img['src'], 'page': item.find('div', {'class': 'storepage_btn_ctn'}).a['href'],
+                        'price': price, 'price_old': price_old}
 
-            wishlist.append(data)
+                self.preload_wishlist.append(data)
 
-        self.log.info('In Steam Wishlist %s games.' % len(wishlist))
+            self.log.info('In You Steam Wishlist %s games.' % len(self.preload_wishlist))
 
-        for game in self.config['wishlist'].split('; '):
-            wishlist.append({'title': game})
+            for game in self.config['wishlist'].split('; '):
+                self.preload_wishlist.append({'title': game})
 
-        return wishlist
+            return self.preload_wishlist
+
+    @property
+    def library(self):
+        try:
+            return self.preload_library
+        except AttributeError:
+            self.log.info('Fetching Steam Library.')
+
+            url = "http://steamcommunity.com/profiles/%s/games/?tab=all" % self.config["steamLogin"][:17]
+            html = self.session.get(url, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
+            self._login_check(html)
+
+            for row in html.decode().splitlines():
+                if 'var rgGames = ' in row:
+                    self.preload_library = json.loads(str.strip(str.rstrip(str.replace(row, 'var rgGames = ', ''), ';')))
+
+            self.log.info('In You Steam Library %s games.' % len(self.preload_library))
+
+            return self.preload_library
 
 
 class Harvester(Parser):
+    required_filters = []
+    disabled_filters = []
+    internal_filters = []
+
     def __init__(self, queue, log_level):
-        self.queue = queue
-        super(Harvester, self).__init__(log_level)
+        super(Harvester, self).__init__(queue, log_level)
+        self.filters = self.required_filters
+        # I know it's shit ^_^
+        try:
+            # list(map(lambda s: self.filters.append(s) if s not in self.filters else None,
+            #          map(lambda s: s if len(s) > 1 else s[0],
+            #              map(lambda s: list(map(lambda s: s.strip(), s)),
+            #                  map(lambda s: s.split('='),
+            #                      map(lambda s: s if s else None, self.config['filters'].split(',')))))))
+
+            [self.filters.append(x) if x not in self.filters else None for x in
+                [x if len(x) > 1 else x[0] for x in
+                    [[x.strip() for x in x.split('=')] for x in
+                        [x for x in self.config['filters'].split(',') if x ]]]]
+        except (KeyError, AttributeError):
+            pass
+
+        self.filters = [f for f in self.filters if f not in self.disabled_filters]
+
+        self.preload_level = None
+
+        if 'wishlist' in self.filters:
+            try:
+                self.filters.remove('library')
+            except:
+                pass
 
     def start(self):
         self.log.info("Starting %s harvester..." % self.verbose_name)
@@ -235,14 +299,6 @@ class Harvester(Parser):
 
         self.queue.put(results)
 
-    def _crash(self):
-        timestamp = datetime.now()
-        results = {'timestamp': timestamp, 'status': 'error'}
-        self.queue.put(results)
-
-        self.log.error('Harvesting %s interrupted.' % self.verbose_name)
-        sys.exit()
-
     @property
     @abc.abstractproperty
     def level(self):
@@ -257,42 +313,165 @@ class Harvester(Parser):
 
         return points
 
-    @abc.abstractmethod
     def _sow(self):
-        giveaways_inter = ({'title': None, 'href': None},)
-        giveaways_inter = ()
+        giveaways_enter = []
+        sow = True
+        points = self.points
 
-        return giveaways_inter
+        page = 1
+        while sow:
+            giveaways = self._get_giveaways(page)
+            if not giveaways:
+                self.log.info('No more giveaways.')
+                sow = False
+                break
+
+            for flt in self.filters:
+                if flt not in self.internal_filters:
+                    if type(flt) == str:
+                        giveaways = list(filter(getattr(self, "_filter_%s" % flt), giveaways))
+                    elif type(flt) == list:
+                        giveaways = getattr(self, "_arged_filter_%s" % flt[0])(giveaways, int(flt[1]))
+
+            page += 1
+
+            for giveaway in giveaways:
+                if points >= giveaway.points:
+                    status = self._enter_giveaway(giveaway)
+                    if status == 'ok':
+                        points -= giveaway.points
+                        giveaways_enter.append({'title': giveaway.title, 'href': giveaway.href})
+                        self.log.info('Take part in «%s» giveaway.' % giveaway.title)
+                else:
+                    self.log.info("Not Enough Points.")
+                    sow = False
+                    break
+
+        return giveaways_enter
 
     @abc.abstractmethod
     def _reap(self):
-        giveaways_win = ({'title': None, 'href': None},)
-        giveaways_win = ()
-
-        return giveaways_win
+        return ({'title': None, 'href': None},)
 
     @abc.abstractmethod
-    def _giveaway_entry(self):
-        result = None
+    def _get_giveaways(self, page):
+        pass
 
-        return result
+    @abc.abstractmethod
+    def _enter_giveaway(self):
+        return 'ok'
 
-class ExternalWishlistHarvester(Harvester):
-    def __init__(self, queue, log_level):
-        super(ExternalWishlistHarvester, self).__init__(queue, log_level)
-        if int(self.config['wishlist']):
-            self.wishlist = SteamParser(log_level).wishlist
+    def _arged_filter_trust(self, giveaways, trust):
+        # exclude giveaways base on author's feedback
+        if trust == -1:
+            return giveaways
         else:
-            self.wishlist = None
+            return [g if g.trust_points >= trust else None for g in giveaways]
 
-    def _in_wishlist(self, title):
+    def _arged_filter_max_points(self, giveaways, points):
+        return [g if g.points <= points else None for g in giveaways]
+
+    def _arged_filter_min_points(self, giveaways, points):
+        return [g if g.points >= points else None for g in giveaways]
+
+    def _arged_filter_min_level(self, giveaways, ):
+        return [g if g.level >= level else None for g in giveaways]
+
+    def _filter_trust(self, giveaway):
+        # exclude giveaways base on author's feedback
+        if giveaway.trust_points > 0:
+            return giveaway
+
+    def _filter_entered(self, giveaway):
+        # exclude giveaways that alredy inter
+        if not giveaway.entered:
+            return giveaway
+
+    def _filter_level(self, giveaway):
+        # exclude giveaways that to hight level
+        if not self.preload_level:
+            self.preload_level = self.level
+
+        if giveaway.level <= self.preload_level:
+            return giveaway
+
+    def _filter_library(self, giveaway):
+        # exclude game's giveaways that alredy in yor lybraly
+        if not giveaway.in_library:
+            return giveaway
+
+    def _filter_wishlist(self, giveaway):
+        # exclude game's giveaways that what not in you wishlist
+        if giveaway.in_wishlist:
+            return giveaway
+
+    def _filter_dlc(self, giveaway):
+        if not giveaway.dlc:
+            return giveaway
+
+
+class Giveaway(Parser):
+    def __init__(self, queue, log_level, href, giveaway_id=None, title=None, entered=False, level=None, points=None,
+                 dlc = False, profile_url=None, trust_points=None, in_wishlist=False,):
+        super(Giveaway, self).__init__(queue, log_level)
+        self.giveaway_id = giveaway_id
+        self.title = title
+        self.href = href
+        self.entered = entered
+        self.level = level
+        self.points = points
+        self.profile_url = profile_url
+        self.trust_points = trust_points
+
+        self.steam = None
+        self.wishlist = None
+        self.library = None
+
+    def _login_check(self, html):
+        soup = bs4.BeautifulSoup(html, PARSER)
+        login = soup.find(self.check_tag, {self.check_type, self.check_text})
+        if login:
+            if not self.login:
+                self.login = True
+        else:
+            if self.login:
+                self.login = False
+
+
+    @property
+    def in_wishlist(self):
         in_wishlist = False
-        for wish in self.wishlist:
-            if re.escape(str.lower(title)) == re.escape(str.lower(wish["title"])):
+
+        if not self.steam:
+            self.steam = SteamParser(self.queue, self.log_level)
+
+        if not self.wishlist:
+            self.wishlist = self.steam.wishlist
+
+        for game in self.wishlist:
+            if re.sub('[^a-z0-9]', '', str.lower(self.title)) == re.sub('[^a-z0-9]', '', str.lower(game["title"])):
                 in_wishlist = True
                 break
 
         return in_wishlist
+
+    @property
+    def in_library(self):
+        in_library = False
+
+        if not self.steam:
+            self.steam = SteamParser(self.queue, self.log_level)
+
+        if not self.library:
+            self.library = self.steam.library
+
+        for game in self.library:
+            if re.sub('[^a-z0-9]', '', str.lower(self.title)) == re.sub('[^a-z0-9]', '', str.lower(game["name"])):
+                in_library = True
+                break
+
+        return in_library
+
 
 class SteamGiftsHarvester(Harvester):
     name = "SteamGifts"
@@ -301,83 +480,105 @@ class SteamGiftsHarvester(Harvester):
     check_tag = "div"
     check_type = "class"
     check_text = "nav__avatar-inner-wrap"
-    cookies = {'PHPSESSID':None}
+    cookies = {'PHPSESSID': None}
+    required_filters = ['entered', 'level', 'library']
+    disabled_filters = ['dlc']
+    internal_filters = ['wishlist']
 
     @property
     def level(self):
         html = self.session.get(self.site_url, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
+        self._login_check(html)
         soup = bs4.BeautifulSoup(html, PARSER)
-        level = int(re.findall('\d', soup.find('span', {'class', 'nav__points'}).nextSibling.nextSibling.text)[0])
+        level = int(re.findall('\d+', soup.find('span', {'class', 'nav__points'}).nextSibling.nextSibling.text)[0])
 
         return level
 
     @property
     def points(self):
         html = self.session.get(self.site_url, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
+        self._login_check(html)
         soup = bs4.BeautifulSoup(html, PARSER)
         points = int(soup.find('span', {'class', 'nav__points'}).text)
 
         return points
 
-    def _sow(self):
-        giveaways_inter = []
-        params = {}
-        sow = True
-
+    def _get_giveaways(self, page):
+        giveaways = []
         url = '%s/giveaways/search' % self.site_url
-        if int(self.config['wishlist']):
-            params.update({'type': 'wishlist'})
+        params = {'page': page}
+        try:
+            if 'wishlist' in self.filters:
+                params.update({'type': 'wishlist'})
+        except:
+            pass
 
-        i = 1
-        while sow:
-            html = self.session.get(self.site_url, cookies=self.cookies, params=params, headers={'User-Agent': self.user_agent}).content
+        html = self.session.get(url, cookies=self.cookies, params=params,
+                                headers={'User-Agent': self.user_agent}).content
+        self._login_check(html)
+        soup = bs4.BeautifulSoup(html, PARSER)
+        items = soup.find('div', {'class': 'page__heading'}).next_sibling.next_sibling.find_all('div', {
+            'class': 'giveaway__row-outer-wrap'})
+
+        for item in items:
+            header = item.find('a', {'class': 'giveaway__heading__name'})
+            href = "%s%s" % (self.site_url, header['href'])
+
+            giveaway = SteamGiftsGiveaway(self.queue, self.log_level, href)
+
+            giveaway.title = header.text.strip()
+
+            giveaway.giveaway_id = int(item['data-game-id'])
+
+            if item.find('div', {'class': 'is-faded'}):
+                giveaway.entered = True
+            else:
+                giveaway.entered = False
+
+            try:
+                giveaway.level = int(re.findall('\d+', item.find('div', {'title': 'Contributor Level'}).text)[0])
+            except AttributeError:
+                giveaway.level = 0
+
+            giveaway.points = int(re.findall('\d+', item.find('span', {'class': 'giveaway__heading__thin'}).text)[0])
+
+            giveaway.profile_url = "%s%s" % (self.site_url, item.find('a', {'class': 'giveaway__username'})['href'])
+
+            giveaways.append(giveaway)
+
+        return giveaways
+
+    def _enter_giveaway(self, giveaway):
+        try:
+            html = self.session.get(giveaway.href, cookies=self.cookies,
+                                    headers={'User-Agent': self.user_agent}).content
+            self._login_check(html)
             soup = bs4.BeautifulSoup(html, PARSER)
 
-            items = soup.find('div', {'class': 'page__heading'}).next_sibling.next_sibling.find_all('div', {
-                'class': 'giveaway__row-outer-wrap'})
-            for item in items:
-                if item.find('div', {'class': 'is-faded'}):
-                    continue
-                else:
-                    item_header = item.find('a', {'class': 'giveaway__heading__name'})
-                    item_title = item_header.text.strip()
-                    item_href = "%s%s" % (self.site_url, item_header['href'])
+            form = soup.find('div', {'class': 'sidebar'}).find('form')
+            xsrf_token = form.find('input', {'name': 'xsrf_token'})['value']
+            do = 'entry_insert'
+            code = form.find('input', {'name': 'code'})['value']
 
-                    html = self.session.get(item_href, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
-                    page = bs4.BeautifulSoup(html, PARSER)
-                    try:
-                        btn_text = page.find('div', {'class': 'sidebar__entry-insert'}).text
-                    except:
-                        btn_text = page.find('div', {'class': 'sidebar__error'}).text.strip()
-                        if btn_text == 'Not Enough Points':
-                            self.log.info("%s." % btn_text)
-                            sow = False
-                            break
-                        else:
-                            self.log.debug("Can't inter in giveaway.%s" % btn_text)
-                            continue
-                    else:
-                        status = self._giveaway_entry(page)
-                        if status == 200:
-                            giveaways_inter.append({'title': item_title, 'href': item_href}, )
-                            self.log.info('Take part in «%s» giveaway.' % item_title)
+            data = {'xsrf_token': xsrf_token, 'do': do, 'code': code}
 
-            if sow:
-                page = soup.find('div', {'class': 'pagination__navigation'}).find_all('a')[-1]
-                if page.span.text == 'Next':
-                    i += 1
-                    params.update({'page': i})
-                else:
-                    sow = False
-                    self.log.info('No more giveaways.')
+            url = "%s/ajax.php" % self.site_url
+            code = self.session.post(url, cookies=self.cookies, data=data,
+                                     headers={'User-Agent': self.user_agent}).status_code
+        except:
+            return 'error'
 
-        return giveaways_inter
+        if code == 200:
+            return 'ok'
+        else:
+            return 'error'
 
     def _reap(self):
         giveaways_win = []
 
         url = '%s/giveaways/won' % self.site_url
         html = self.session.get(url, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
+        self._login_check(html)
         soup = bs4.BeautifulSoup(html, PARSER)
 
         items = soup.find('div', {'class': 'table__rows'}).find_all('div', {'class': 'table__row-outer-wrap'})
@@ -396,32 +597,72 @@ class SteamGiftsHarvester(Harvester):
 
         return giveaways_win
 
-    def _giveaway_entry(self, page):
-        url = "%s/ajax.php" % self.site_url
 
-        form = page.find('div', {'class': 'sidebar'}).find('form')
-        xsrf_token = form.find('input', {'name': 'xsrf_token'})['value']
-        do = 'entry_insert'
-        code = form.find('input', {'name': 'code'})['value']
+class SteamGiftsGiveaway(Giveaway):
+    name = "SteamGifts"
+    verbose_name = "«Steam Gifts»"
+    site_url = "https://www.steamgifts.com"
+    check_tag = "div"
+    check_type = "class"
+    check_text = "nav__avatar-inner-wrap"
+    cookies = {'PHPSESSID': None}
 
-        data = {'xsrf_token': xsrf_token, 'do': do, 'code': code}
+    def __init__(self, queue, log_level, href, giveaway_id=None, title=None, entered=False, level=None, points=None, profile_url=None):
+        super(Giveaway, self).__init__(queue, log_level)
+        self.giveaway_id = giveaway_id
+        self.title = title
+        self.href = href
+        self.entered = entered
+        self.level = level
+        self.points = points
+        self.profile_url = profile_url
 
-        html = self.session.post(url, cookies=self.cookies, data=data, headers={'User-Agent': self.user_agent}).content
+        self.steam = None
+        self.wishlist = None
+        self.library = None
 
-        if html:
-            status = 200
+    @property
+    def trust_points(self):
+        html = self.session.get(self.profile_url, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
+        self._login_check(html)
+        soup = bs4.BeautifulSoup(html, PARSER)
 
-        return status
+        gift_sent_row = soup.find('span', {'title': re.compile('\d+ Awaiting Feedback, \d+ Not Received')})
+        gift_wait, gift_fail = list(map(lambda i: int(i), re.findall('\d+', gift_sent_row['title'])))
+        gift_sent = int(gift_sent_row.a.text.replace(',', ''))
 
-#TODO incapsula bypass
-class IndieGalaHarvester(ExternalWishlistHarvester):
+        trust_points = gift_sent - gift_wait - gift_fail
+
+        return trust_points
+
+    @property
+    def in_library(self):
+        html = self.session.get(self.href, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
+        self._login_check(html)
+        soup = bs4.BeautifulSoup(html, PARSER)
+
+        try:
+            error = soup.find('div', {'class', 'sidebar__error'}).text.strip()
+        except AttributeError:
+            return False
+        else:
+            if error == 'Exists in Account':
+                return True
+            else:
+                return False
+
+
+# TODO incapsula bypass
+class IndieGalaHarvester(Harvester):
     name = "IndieGala"
     verbose_name = "«Indie Gala»"
     site_url = "https://www.indiegala.com/giveaways"
     check_tag = "span"
     check_type = "class"
     check_text = "account-email"
-    cookies = {'auth':None, 'incap_ses_586_255598': None}
+    cookies = {'auth': None, 'incap_ses_586_255598': None, 'incap_ses_408_255598': None}
+    required_filters = ['entered', 'level']
+    disabled_filters = ['dlc']
 
     @property
     def level(self):
@@ -439,129 +680,91 @@ class IndieGalaHarvester(ExternalWishlistHarvester):
     @property
     def points(self):
         html = self.session.get(self.site_url, headers={'User-Agent': self.user_agent}).content
+        self._login_check(html)
         soup = bs4.BeautifulSoup(html, PARSER)
 
         points = int(soup.find('span', {'id': 'silver-coins-menu'}).text)
 
         return points
 
-    def _sow(self):
-        level = self.level
-        points = self.points
-        giveaways_inter = []
-        sow = True
+    def _get_giveaways(self, page):
+        giveaways = []
+        url = '%s/%s' % (self.site_url, page)
 
-        url = self.site_url
-        if self.config['sort'] and self.config['direction']:
-            params = '%s/%s' % (self.config['sort'], self.config['direction'])
-        elif self.config['sort']:
-            params = '%s/asc' % self.config['sort']
-        elif self.config['direction']:
-            params = 'expiry/%s' % self.config['direction']
-        else:
-            params = 'expiry/asc'
+        html = self.session.get(url, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
+        self._login_check(html)
+        soup = bs4.BeautifulSoup(html, PARSER)
+        items = soup.find('div', {'class': 'tickets-row'}).find_all('div', {'class': 'tickets-col'})
+        for item in items:
+            header = item.find('div', {'class': 'box_pad_5'}).h2.a
+            href = "%s%s" % (self.site_url, str.replace(header['href'], '/giveaways', '', 1))
+            giveaway = IndieGalaGiveaway(self.queue, self.log_level, href)
 
-        i = 1
-        while sow:
-            self.log.debug('Starting parse page %s' % i)
-            r_url = "%s/%s/%s" % (url, i, params)
-            html = self.session.get(r_url, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
-            soup = bs4.BeautifulSoup(html, PARSER)
+            giveaway.title = header['title']
 
-            items = soup.find('div', {'class': 'tickets-row'}).find_all('div', {'class': 'tickets-col'})
-            for item in items:
-                item_level = int(re.findall(r'\d', item.find('div', {'class': 'type-level-cont'}).find('div', {
-                    'class': 'spacer-v-5'}).next.strip())[0])
-                coupon = item.find('aside', {'class': 'giv-coupon'})
-                item_header = item.find('div', {'class': 'box_pad_5'}).h2.a
-                item_title = item_header['title']
-                item_url = "%s%s" % (self.site_url, str.replace(item_header['href'], '/giveaways', '', 1))
-                item_creater = item.find('div', {'class': 'steamnick'}).a
-                item_creater_url = "%s%s" % (str.replace(self.site_url, '/giveaways', '', 1), item_creater['href'])
-                trust_points = self._get_trust_points(item_creater_url)
-                giv_id = item.find('div', {'class': 'ticket-right'}).div['rel']
-                ticket_price = int(item.find('div', {'class': 'ticket-price'}).strong.text.strip())
+            giveaway.giveaway_id = item.find('div', {'class': 'ticket-right'}).div['rel']
 
-                if level < item_level or not coupon or trust_points < int(self.config['trust_points']):
-                    continue
-                elif not int(self.config['wishlist']):
-                    if not int(self.config['in_steam']):
-                        in_steam = self._in_steam(item_url)
-                        if not in_steam:
-                            if points < ticket_price:
-                                sow = False
-                                self.log.info("Not Enough Coins.")
-                                break
-                            else:
-                                resp = self._giveaway_entry(giv_id, ticket_price)
-                                status = resp['status']
-                                points = resp['new_amount']
-                                if status == 'ok':
-                                    giveaways_inter.append({'title': item_title, 'href': item_url}, )
-                                    self.log.info('Take part in «%s» giveaway.' % item_title)
-                        else:
-                            self.log.debug('You alrady own «%s»' % item_title)
-                            continue
+            if item.find('aside', {'class': 'giv-coupon'}):
+                giveaway.entered = False
+            else:
+                giveaway.entered = True
 
-                    else:
-                        if points < ticket_price:
-                            sow = False
-                            self.log.info("Not Enough Coins.")
-                            break
-                        else:
-                            resp = self._giveaway_entry(giv_id, ticket_price)
-                            status = resp['status']
-                            points = resp['new_amount']
-                            if status == 'ok':
-                                giveaways_inter.append({'title': item_title, 'href': item_url}, )
-                                self.log.info('Take part in «%s» giveaway.' % item_title)
+            giveaway.level = int(re.findall('\d+', item.find('div', {'class': 'type-level-cont'}).find('div', {'class': 'spacer-v-5'}).next.strip())[0])
 
-                else:
-                    in_wishlist = self._in_wishlist(item_title)
-                    if in_wishlist:
-                        if points < ticket_price:
-                            sow = False
-                            self.log.info("Not Enough Coins.")
-                            break
-                        else:
-                            resp = self._giveaway_entry(giv_id, ticket_price)
-                            status = resp['status']
-                            points = resp['new_amount']
-                            if status == 'ok':
-                                giveaways_inter.append({'title': item_title, 'href': item_url}, )
-                                self.log.info('Take part in «%s» giveaway.' % item_title)
+            giveaway.points = int(item.find('div', {'class': 'ticket-price'}).strong.text.strip())
 
-            if sow:
-                try:
-                    page = soup.find('div', {'class': 'page-nav'}).find_all('div', {'class': 'page-link-cont'})[-2].a
-                    i += 1
-                except AttributeError:
-                    sow = False
-                    self.log.info('No more giveaways.')
+            creater = item.find('div', {'class': 'steamnick'}).a
 
-        return giveaways_inter
+            giveaway.profile_url = "%s%s" % (str.replace(self.site_url, '/giveaways', '', 1), creater['href'])
+
+            giveaways.append(giveaway)
+
+        return giveaways
+
+    def _enter_giveaway(self, giveaway):
+        try:
+            url = '%s/new_entry' % self.site_url
+
+            data = {'giv_id': giveaway.giveaway_id, 'ticket_price': giveaway.points}
+
+            data = self.session.post(url, cookies=self.cookies, data=json.dumps(data),
+                                     headers={'User-Agent': self.user_agent}).json()
+
+            return data['status']
+        except:
+            return 'error'
 
     def _reap(self):
-        giveaways_win = []
-
+        reap = True
         url = '%s/library_completed' % self.site_url
+        while reap:
+            data = self.session.get(url, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
+            try:
+                html = json.loads(data)['html']
+            except:
+                break
 
-        data = self.session.get(url, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
-        html = json.loads(data)['html']
-        soup = bs4.BeautifulSoup(html, PARSER)
-        items = soup.find_all('ul', {'class': 'giveaways-completed-list'})[0].find_all('li')
-        try:
-            for item in items:
-                r_url = '%s/check_if_won' % self.site_url
+            soup = bs4.BeautifulSoup(html, PARSER)
+            items = soup.find_all('ul', {'class': 'giveaways-completed-list'})[0].find_all('li')
 
-                entry_id = item.find('input', {'name': 'entry_id'})['value']
+            try:
+                for item in items:
+                    if "No results." in item.text:
+                        reap = False
+                        break
+                    else:
+                        r_url = '%s/check_if_won' % self.site_url
 
-                data = {'entry_id': entry_id}
+                        entry_id = item.find('input', {'name': 'entry_id'})['value']
 
-                self.session.post(r_url, cookies=self.cookies, data=json.dumps(data), headers={'User-Agent': self.user_agent})
-        except TypeError:
-            pass
+                        data = {'entry_id': entry_id}
 
+                        self.session.post(r_url, cookies=self.cookies, data=json.dumps(data),
+                                          headers={'User-Agent': self.user_agent})
+            except TypeError:
+                pass
+
+        giveaways_win = []
         data = self.session.get(url, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
         html = json.loads(data)['html']
 
@@ -584,26 +787,34 @@ class IndieGalaHarvester(ExternalWishlistHarvester):
 
         return giveaways_win
 
-    def _giveaway_entry(self, giv_id, ticket_price):
-        url = '%s/new_entry' % self.site_url
 
-        data = {'giv_id': giv_id, 'ticket_price': ticket_price}
+class IndieGalaGiveaway(Giveaway):
+    name = "IndieGala"
+    verbose_name = "«Indie Gala»"
+    site_url = "https://www.indiegala.com/giveaways"
+    check_tag = "span"
+    check_type = "class"
+    check_text = "account-email"
+    cookies = {'auth': None, 'incap_ses_586_255598': None}
 
-        data = self.session.post(url, cookies=self.cookies, data=json.dumps(data), headers={'User-Agent': self.user_agent}).json()
+    def __init__(self, queue, log_level, href, giveaway_id=None, title=None, entered=False, level=None, points=None, profile_url=None):
+        super(Giveaway, self).__init__(queue, log_level)
+        self.giveaway_id = giveaway_id
+        self.title = title
+        self.href = href
+        self.entered = entered
+        self.level = level
+        self.points = points
+        self.profile_url = profile_url
 
-        return data
+        self.steam = None
+        self.wishlist = None
+        self.library = None
 
-    def _in_steam(self, url):
-        html = self.session.get(url, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
-        soup = bs4.BeautifulSoup(html, PARSER)
-
-        if soup.find('div', {'class': 'on-steam-library-corner'}):
-            return True
-        else:
-            return False
-
-    def _get_trust_points(self, url):
-        html = self.session.get(url, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
+    @property
+    def trust_points(self):
+        html = self.session.get(self.profile_url, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
+        self._login_check(html)
         soup = bs4.BeautifulSoup(html, PARSER)
         try:
             positive = int(soup.find('span', {'title': 'Positive feedbacks'}).text)
@@ -615,6 +826,18 @@ class IndieGalaHarvester(ExternalWishlistHarvester):
 
         return points
 
+    @property
+    def in_library(self):
+        html = self.session.get(self.href, cookies=self.cookies, headers={'User-Agent': self.user_agent}).content
+        self._login_check(html)
+        soup = bs4.BeautifulSoup(html, PARSER)
+
+        if soup.find('div', {'class': 'on-steam-library-corner'}):
+            return True
+        else:
+            return False
+
+
 def spawner(name, queue, log_level):
     if name == "SteamGifts":
         harvester = SteamGiftsHarvester(queue, log_level)
@@ -624,8 +847,9 @@ def spawner(name, queue, log_level):
         harvester = IndieGalaHarvester(queue, log_level)
         harvester.start()
 
+
 def main():
-    #multiprocessing.set_start_method('spawn')  #set mt start method like on windows for testing
+    # multiprocessing.set_start_method('spawn')  #set mt start method like on windows for testing
     opt_parser = OptionParser()
     opt_parser.add_option("--debug", action="store_true", dest="debug", default=False, help="Enable debug messanges")
     options, args = opt_parser.parse_args()
@@ -673,24 +897,25 @@ def main():
                         if results['status'] == "ok":
                             if len(results['reap']) > 0:
                                 log.info(
-                                    '[%(timestamp)s] %(key)s Harvester end work takes part in %(num)s giveaways, and you have win something.' %
+                                    '[%(timestamp)s] %(key)s Harvester end work takes part in %(num)s giveaways, and YOU WIN something!' %
                                     {'timestamp': results['timestamp'].strftime("%Y-%m-%d %H:%M:%S"), 'key': key,
-                                     'num': len(results['reap'])})
+                                     'num': len(results['sow'])})
                             else:
                                 log.info(
                                     "[%(timestamp)s] %(key)s Harvester end work: takes part in %(num)s giveaways, and you don't win anything. For now..." %
                                     {'timestamp': results['timestamp'].strftime("%Y-%m-%d %H:%M:%S"), 'key': key,
-                                     'num': len(results['reap'])})
+                                     'num': len(results['sow'])})
 
                         elif results['status'] == "error":
                             log.error('[%(timestamp)s] %(key)s Harvester end work with error' %
-                                     {'timestamp': results['timestamp'].strftime("%Y-%m-%d %H:%M:%S"), 'key': key})
+                                      {'timestamp': results['timestamp'].strftime("%Y-%m-%d %H:%M:%S"), 'key': key})
 
                 time.sleep(60)
 
         except KeyboardInterrupt:
             log.info("Interrupted by user.")
             bot.stop()
+
 
 if __name__ == '__main__':
     main()

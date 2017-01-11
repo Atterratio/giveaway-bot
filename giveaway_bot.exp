@@ -13,14 +13,25 @@ steamLogin:
 #For example: GTA V; Skyrim; Dishonored
 wishlist:
 
+
+#Filter based system:
+#"entered" not enter alredy entered giveaways(aredy enable for most saites)
+#"level" not enter to hight levels giveaways (aredy enable for most saites)
+#"wishlist" exclude game's giveaways that what not in you wishlist
+#"library" exclude game's giveaways that alredy in yor lybraly()
+#"dlc" exclude dlc's giveaways(no hatvester with it option right now)
+#"trust" same as trust=1
+#"trust=1|0|-1" exclude giveaways base on author's feedback: 1 - exclude with zero and negative feedback, 0 - exclude with negative feedback, -1 - don't exclude(recomend remove filter)
+#"max_points=num" exclude giveaways if they expensive that num
+#"min_points=num" exclude giveaways if they chip that num
+#"min_level=num"  exclude giveaways if they level lower that num
 [SteamGifts]
 enable: 1
 
 #Paste cookies with the same name from http://www.steamgifts.com/
 PHPSESSID:
-
-#Inter only in giveaways for game in wishlist(site built-in)
-wishlist: 1
+#filters: wishlist, trust=1, max_points=60,min_points=3, min_level=1
+filters: wishlist, trust=0
 
 [IndieGala]
 #Work instable(but work) need incapsula bypass
@@ -32,18 +43,5 @@ auth:
 #Help bypass incapsula some time, but finale need update
 incap_ses_586_255598:
 
-#Try inter only in giveaways for game parsed from Steam wishlist(parsed)
-wishlist: 1
-
-#Enter in giveaways game's what already own(work only if wishlist: 0)
-in_steam: 0
-
-#Enter giveaways only if Trust points>=num
-#Trust points = |(Positive feedbacks)|-|(Negative feedbacks)|
-#Frome some profiles can't get info, when Trust points = -1
-trust_points: 0
-
-#expiry, price, participants
-sort: expiry
-#asc, desc
-direction: asc
+#filters: wishlist, library, trust=1, max_points=60,min_points=3, min_level=1
+filters: library, trust
