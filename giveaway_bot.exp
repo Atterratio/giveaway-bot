@@ -2,15 +2,16 @@
 [main]
 #Time in minutes to sleep before new check
 sleepTime: 10
-User_Agent:
+#Not nessesary, but may be useful
+USER_AGENT:
 
 [Steam]
 #Paste cookies with the same name from http://steamcommunity.com/
 steamLogin:
 #Replace "%7C%7C" to "||" in "steamLogin"
 
-#Additions to Steam wishlist, will be used whenever where use parsed wishlist but not built-in site, o add some aliases.
-#For example: GTA V; Skyrim; Dishonored
+#Id's of games to locally append in wishlist. It can be useful if you do not want clutter up wishlist, or enter in game giveaways what already own.
+#For example: 80, 320, 400
 wishlist:
 
 
@@ -18,13 +19,15 @@ wishlist:
 #"entered" not enter alredy entered giveaways(aredy enable for most saites)
 #"level" not enter to hight levels giveaways (aredy enable for most saites)
 #"wishlist" exclude game's giveaways that what not in you wishlist
-#"library" exclude game's giveaways that alredy in yor lybraly()
-#"dlc" exclude dlc's giveaways(no hatvester with it option right now)
+#"library" exclude game's giveaways that alredy in yor library()
+#"dlc" exclude dlc's giveaways
+#"cards" exclude giveaways games without cards
 #"trust" same as trust=1
 #"trust=1|0|-1" exclude giveaways base on author's feedback: 1 - exclude with zero and negative feedback, 0 - exclude with negative feedback, -1 - don't exclude(recomend remove filter)
 #"max_points=num" exclude giveaways if they expensive that num
 #"min_points=num" exclude giveaways if they chip that num
 #"min_level=num"  exclude giveaways if they level lower that num
+#"os=all|win|lin|mac"
 [SteamGifts]
 enable: 1
 
@@ -41,6 +44,9 @@ enable: 0
 #"" need to
 auth:
 #Help bypass incapsula some time, but finale need update
+# If you have't some "ses" cookies live it empty
+incap_ses_408_255598:
+incap_ses_583_255598:
 incap_ses_586_255598:
 
 #filters: wishlist, library, trust=1, max_points=60,min_points=3, min_level=1
