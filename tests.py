@@ -1,10 +1,74 @@
 import unittest
 import multiprocessing
 import random
+import logging
+import os
 
-from giveaway_bot import SteamParser, Harvester, Giveaway
+from giveaway_bot import SteamParser, Harvester, Giveaway, caching_property, retrying
 from giveaway_bot import SteamGiftsHarvester, SteamGiftsGiveaway
 from giveaway_bot import IndieGalaHarvester, IndieGalaGiveaway
+from giveaway_bot import NoItemsError
+
+os.chdir(os.path.dirname(__file__))
+
+class DecoratorsTestCase(unittest.TestCase):
+    def test_caching_property(self):
+        class CachingTest:
+            def __init__(self):
+                self.cached_two = 'two_cached'
+
+            @property
+            def one(self):
+                return "one_not_cached"
+
+            @property
+            @caching_property
+            def two(self):
+                return "two_not_cashed"
+
+        obj = CachingTest()
+
+        one = obj.one
+        self.assertEqual(one,'one_not_cached')
+
+        two = obj.two
+        self.assertEqual(two,'two_cached')
+
+    def test_retrying(self):
+        class RetryingTest:
+            def __init__(self, logger_name='default'):
+                self.log_level = logging.DEBUG
+                self.log = logging.getLogger(logger_name)
+                if not self.log.hasHandlers():
+                    formatter = logging.Formatter('[%(asctime)s][%(levelname)s][%(name)s]: %(message)s',
+                                                  "%Y-%m-%d %H:%M:%S")
+                    console = logging.StreamHandler()
+                    console.setFormatter(formatter)
+                    self.log.addHandler(console)
+                self.log.setLevel(self.log_level)
+
+                self.config = {}
+                self.config['retry'] = 0
+                self.config['timeout'] = 0
+
+            @retrying
+            def fn(self):
+                self.log.debug('Logging')
+                raise NoItemsError
+
+        default = RetryingTest()
+        with self.assertLogs('default', level='DEBUG') as log:
+            default.fn()
+            self.assertEqual(len(log.output), 1)
+
+        two = RetryingTest(logger_name='two')
+        two.config['retry'] = 2
+        with self.assertLogs('two', level='DEBUG') as log:
+            two.fn()
+            self.assertEqual(len(log.output), 3)
+
+        # TODO timeout test
+
 
 class SteamParserTestCase(unittest.TestCase):
     def setUp(self):
@@ -29,6 +93,7 @@ class SteamParserTestCase(unittest.TestCase):
         self.assertGreater(len(wishlist), 0)
 
         random_item = wishlist[random.randint(0, len(wishlist)-1)]
+        self.assertIsInstance(random_item, dict)
         self.assertIn('id', random_item)
         self.assertIs(type(random_item['id']), int)
         self.assertIn('title', random_item)
@@ -41,6 +106,7 @@ class SteamParserTestCase(unittest.TestCase):
         self.assertGreater(len(library), 0)
 
         random_item = library[random.randint(0, len(library)-1)]
+        self.assertIsInstance(random_item, dict)
         self.assertIn('appid', random_item)
         self.assertIsInstance(random_item['appid'], int)
         self.assertIn('name', random_item)
@@ -342,6 +408,7 @@ class SteamGiftsHarvesterTestCase(unittest.TestCase):
         queue = multiprocessing.Queue()
         log_level = 100
         self.harvester = SteamGiftsHarvester(queue, log_level)
+        self.harvester.filters = []
 
     def test_login_check(self):
         loged_html = '<div class="nav__avatar-inner-wrap"></div>'
@@ -358,6 +425,14 @@ class SteamGiftsHarvesterTestCase(unittest.TestCase):
         points = self.harvester.points
         self.assertIsInstance(points, int)
         self.assertGreaterEqual(points, 0)
+
+    def test_get_giveaways(self):
+        giveaways = self.harvester._get_giveaways(1)
+        self.assertIsInstance(giveaways, list)
+        self.assertEqual(len(giveaways), 50)
+
+        random_item = giveaways[random.randint(0, len(giveaways)-1)]
+        self.assertIsInstance(random_item, SteamGiftsGiveaway)
 
 
 class SteamGiftsGiveawayTestCase(unittest.TestCase):
@@ -393,6 +468,14 @@ class IndieGalaHarvesterTestCase(unittest.TestCase):
         points = self.harvester.points
         self.assertIsInstance(points, int)
         self.assertGreaterEqual(points, 0)
+
+    def test_get_giveaways(self):
+        giveaways = self.harvester._get_giveaways(1)
+        self.assertIsInstance(giveaways, list)
+        self.assertEqual(len(giveaways), 12)
+
+        random_item = giveaways[random.randint(0, len(giveaways)-1)]
+        self.assertIsInstance(random_item, IndieGalaGiveaway)
 
 
 class IndieGalaGiveawayTestCase(unittest.TestCase):

@@ -6,6 +6,8 @@ sleepTime: 10
 USER_AGENT:
 
 [Steam]
+retry: 0
+timeout: 0
 #Paste cookies with the same name from http://steamcommunity.com/
 steamLogin:
 #Replace "%7C%7C" to "||" in "steamLogin"
@@ -30,6 +32,8 @@ wishlist:
 #"os=all|win|lin|mac"
 [SteamGifts]
 enable: 1
+retry: 0
+timeout: 0
 
 #Paste cookies with the same name from http://www.steamgifts.com/
 PHPSESSID:
@@ -39,6 +43,8 @@ filters: wishlist, trust=0
 [IndieGala]
 #Work instable(but work) need incapsula bypass
 enable: 0
+retry: 3
+timeout: 3
 
 #Paste cookies with the same name from https://www.indiegala.com/
 #"" need to
