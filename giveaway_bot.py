@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timedelta
 from optparse import OptionParser
 from http import cookiejar
+from requests.exceptions import TooManyRedirects
 
 import bs4
 import requests
@@ -27,6 +28,8 @@ else:
 os.chdir(os.path.dirname(__file__))
 
 USER_AGENT = 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:50) Gecko/20100101 Firefox/50.0'
+UNIT_TESTS = False
+TRAVIS_BUILD = False
 
 class Error(Exception):
     pass
@@ -103,6 +106,9 @@ def retrying(fn):
                 else:
                     obj._crash("%s reap error. Interrupt reaping." % obj.verbose_name)
 
+            except TooManyRedirects:
+                obj._crash("Can't login to %s. Check cookies." % obj.verbose_name)
+
             except:
                 if retry < retries:
                     retry += 1
@@ -128,7 +134,10 @@ class GiveawayBot:
 
         self.config = configparser.ConfigParser()
         try:
-            self.config.read_file(open("giveaway_bot.ini"))
+            if TRAVIS_BUILD:
+                self.config.read_file(open("giveaway_bot.exp"))
+            else:
+                self.config.read_file(open("giveaway_bot.ini"))
         except FileNotFoundError:
             self.log.error("No config file. Please copy «giveaway_bot.exp» as «giveaway_bot.ini» and edit it.")
             sys.exit()
@@ -180,7 +189,10 @@ class Parser(metaclass=abc.ABCMeta):
         self.log.setLevel(log_level)
 
         self.config = configparser.ConfigParser()
-        self.config.read_file(open("giveaway_bot.ini"))
+        if TRAVIS_BUILD:
+            self.config.read_file(open("giveaway_bot.exp"))
+        else:
+            self.config.read_file(open("giveaway_bot.ini"))
         self.config = self.config[self.name]
 
         self.queue = queue
@@ -200,6 +212,9 @@ class Parser(metaclass=abc.ABCMeta):
 
         for key in self.cookies:
             self.cookies[key] = self.config[key]
+        
+        if all(bool(self.cookies[key]) is False for key in self.cookies):
+            self.cookies = None
 
         self.cj = requests.utils.cookiejar_from_dict(self.cookies)
 
@@ -217,7 +232,10 @@ class Parser(metaclass=abc.ABCMeta):
         self.queue.put(results)
 
         self.log.error(msg)
-        os._exit(1)
+        if UNIT_TESTS:
+            raise
+        else:
+            os._exit(1)
 
 
     def _login_check(self, html):
@@ -343,7 +361,6 @@ class SteamParser(Parser):
         os_list = []
         url = "http://store.steampowered.com/app/%s" % game_id
         html = self.session.get(url, cookies=self.cookies, headers={'User-Agent': USER_AGENT}).content
-        self._login_check(html)
         soup = bs4.BeautifulSoup(html, PARSER)
         if soup.find('span', {'class': 'platform_img win'}):
             os_list.append('win')
@@ -366,7 +383,6 @@ class SteamParser(Parser):
         """
         url = "http://store.steampowered.com/app/%s" % game_id
         html = self.session.get(url, cookies=self.cookies, headers={'User-Agent': USER_AGENT}).content
-        self._login_check(html)
         soup = bs4.BeautifulSoup(html, PARSER)
         if soup.find('div', {'class': 'game_area_dlc_bubble'}):
             return 'dlc'
@@ -384,7 +400,6 @@ class SteamParser(Parser):
 
         url = "http://store.steampowered.com/app/%s" % game_id
         html = self.session.get(url, cookies=self.cookies, headers={'User-Agent': USER_AGENT}).content
-        self._login_check(html)
         soup = bs4.BeautifulSoup(html, PARSER)
         categories = soup.find('div', {'id': 'category_block'})
         for img in categories.find_all('img', {'class': 'category_icon'}):
@@ -398,7 +413,6 @@ class SteamParser(Parser):
     def get_title(self, game_id):
         url = "http://store.steampowered.com/app/%s" % game_id
         html = self.session.get(url, cookies=self.cookies, headers={'User-Agent': USER_AGENT}).content
-        self._login_check(html)
         soup = bs4.BeautifulSoup(html, PARSER)
         return soup.find('div', {'class': 'apphub_AppName'}).text
 
@@ -956,18 +970,7 @@ class SteamGiftsGiveaway(Giveaway):
     @property
     @caching_property
     def trust_points(self):
-        retry = 0
-        while True:
-            try:
-                html = self.session.get(self.profile_url, cookies=self.cookies, headers={'User-Agent': USER_AGENT}).content
-                self._login_check(html)
-                break
-            except AuthError:
-                if retry < int(self.config['retry']):
-                    retry += 1
-                    continue
-                else:
-                    self._crash("Can't login to %s. Check cookies." % self.verbose_name)
+        html = self.session.get(self.profile_url, cookies=self.cookies, headers={'User-Agent': USER_AGENT}).content
 
         soup = bs4.BeautifulSoup(html, PARSER)
         gift_sent_row = soup.find('span', {'title': re.compile('\d+ Awaiting Feedback, \d+ Not Received')})
